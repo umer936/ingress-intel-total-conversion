@@ -115,12 +115,12 @@ function createDefaultBaseMapLayers() {
   //OpenStreetMap attribution - required by several of the layers
   osmAttribution = 'Map data © OpenStreetMap contributors';
 
-  //MapQuest offer tiles - http://developer.mapquest.com/web/products/open/map
-  //their usage policy has no limits (except required notification above 4000 tiles/sec - we're perhaps at 50 tiles/sec based on CloudMade stats)
-  var mqSubdomains = [ 'otile1','otile2', 'otile3', 'otile4' ];
-  var mqTileUrlPrefix = window.location.protocol !== 'https:' ? 'http://{s}.mqcdn.com' : 'https://{s}-s.mqcdn.com';
-  var mqMapOpt = {attribution: osmAttribution+', Tiles Courtesy of MapQuest', maxNativeZoom: 18, maxZoom: 21, subdomains: mqSubdomains};
-  baseLayers['MapQuest OSM'] = new L.TileLayer(mqTileUrlPrefix+'/tiles/1.0.0/map/{z}/{x}/{y}.jpg',mqMapOpt);
+  // MapQuest - http://developer.mapquest.com/web/products/open/map
+  // now requires an API key
+  //var mqSubdomains = [ 'otile1','otile2', 'otile3', 'otile4' ];
+  //var mqTileUrlPrefix = window.location.protocol !== 'https:' ? 'http://{s}.mqcdn.com' : 'https://{s}-s.mqcdn.com';
+  //var mqMapOpt = {attribution: osmAttribution+', Tiles Courtesy of MapQuest', maxNativeZoom: 18, maxZoom: 21, subdomains: mqSubdomains};
+  //baseLayers['MapQuest OSM'] = new L.TileLayer(mqTileUrlPrefix+'/tiles/1.0.0/map/{z}/{x}/{y}.jpg',mqMapOpt);
 
   // cartodb has some nice tiles too - both dark and light subtle maps - http://cartodb.com/basemaps/
   // (not available over https though - not on the right domain name anyway)
@@ -165,7 +165,7 @@ window.setupMap = function() {
     center: [0,0],
     zoom: 1,
     zoomControl: (typeof android !== 'undefined' && android && android.showZoom) ? android.showZoom() : true,
-    minZoom: 1,
+    minZoom: MIN_ZOOM,
 //    zoomAnimation: false,
     markerZoomAnimation: false,
     bounceAtZoomLimits: false
@@ -201,7 +201,7 @@ window.setupMap = function() {
     portalsFactionLayers[i] = [L.layerGroup(), L.layerGroup(), L.layerGroup()];
     portalsLayers[i] = L.layerGroup(portalsFactionLayers[i]);
     map.addLayer(portalsLayers[i]);
-    var t = (i === 0 ? 'Unclaimed' : 'Level ' + i) + ' Portals';
+    var t = (i === 0 ? 'Unclaimed/Placeholder' : 'Level ' + i) + ' Portals';
     addLayers[t] = portalsLayers[i];
     // Store it in hiddenLayer to remove later
     if(!isLayerGroupDisplayed(t, true)) hiddenLayer.push(portalsLayers[i]);
@@ -453,6 +453,7 @@ window.setupSidebarToggle = function() {
       toggle.html('<span class="toggle close"></span>');
       toggle.css('right', SIDEBAR_WIDTH+1+'px');
     }
+    $('.ui-tooltip').remove();
   });
 }
 
@@ -460,10 +461,11 @@ window.setupTooltips = function(element) {
   element = element || $(document);
   element.tooltip({
     // disable show/hide animation
-    show: { effect: "hide", duration: 0 } ,
+    show: { effect: 'none', duration: 0, delay: 350 },
     hide: false,
     open: function(event, ui) {
-      ui.tooltip.delay(300).fadeIn(0);
+      // ensure all other tooltips are closed
+      $(".ui-tooltip").not(ui.tooltip).remove();
     },
     content: function() {
       var title = $(this).attr('title');
@@ -517,7 +519,11 @@ window.setupLayerChooserApi = function() {
     var baseLayersJSON = JSON.stringify(baseLayers);
 
     if (typeof android !== 'undefined' && android && android.setLayers) {
-        android.setLayers(baseLayersJSON, overlayLayersJSON);
+        if(this.androidTimer) clearTimeout(this.androidTimer);
+        this.androidTimer = setTimeout(function() {
+            this.androidTimer = null;
+            android.setLayers(baseLayersJSON, overlayLayersJSON);
+        }, 1000);
     }
 
     return {
@@ -559,6 +565,27 @@ window.setupLayerChooserApi = function() {
     }
 
     return true;
+  };
+
+  var _update = window.layerChooser._update;
+  window.layerChooser._update = function() {
+    // update layer menu in IITCm
+    try {
+      if(typeof android != 'undefined')
+        window.layerChooser.getLayers();
+    } catch(e) {
+      console.error(e);
+    }
+    // call through
+    return _update.apply(this, arguments);
+  }
+  // as this setupLayerChooserApi function is called after the layer menu is populated, we need to also get they layers once
+  // so they're passed through to the android app
+  try {
+    if(typeof android != 'undefined')
+      window.layerChooser.getLayers();
+  } catch(e) {
+    console.error(e);
   }
 }
 
@@ -584,14 +611,14 @@ function boot() {
   }});
 
   window.extractFromStock();
-  window.iitc_bg.init(); //NOTE: needs to be early (before any requests sent), but after extractFromStock()
   window.setupIdle();
   window.setupTaphold();
   window.setupStyles();
   window.setupDialogs();
+  window.setupDataTileParams();
   window.setupMap();
   window.setupOMS();
-  window.setupGeosearch();
+  window.search.setup();
   window.setupRedeem();
   window.setupLargeImagePreview();
   window.setupSidebarToggle();
@@ -637,7 +664,7 @@ function boot() {
       $.each(badPlugins,function(name,desc) {
         warning += '<li><b>'+name+'</b>: '+desc+'</li>';
       });
-      warning += '</ul><p>Please uninstall the problem plugins and reload the page. See this <a href="http://iitc.jonatkins.com/?page=faq#uninstall">FAQ entry</a> for help.</p><p><i>Note: It is tricky for IITC to safely disable just problem plugins</i></p>';
+      warning += '</ul><p>Please uninstall the problem plugins and reload the page. See this <a href="http://iitc.me/faq/#uninstall">FAQ entry</a> for help.</p><p><i>Note: It is tricky for IITC to safely disable just problem plugins</i></p>';
 
       dialog({
         title: 'Plugin Warning',
@@ -690,8 +717,8 @@ try { console.log('Loading included JS now'); } catch(e) {}
 try { console.log('done loading included JS'); } catch(e) {}
 
 //note: no protocol - so uses http or https as used on the current page
-var JQUERY = '//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js';
-var JQUERYUI = '//ajax.googleapis.com/ajax/libs/jqueryui/1.10.4/jquery-ui.min.js';
+var JQUERY = '//ajax.googleapis.com/ajax/libs/jquery/2.1.3/jquery.min.js';
+var JQUERYUI = '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.3/jquery-ui.min.js';
 
 // after all scripts have loaded, boot the actual app
 load(JQUERY).then(JQUERYUI).thenRun(boot);
